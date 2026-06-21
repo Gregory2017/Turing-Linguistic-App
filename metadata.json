@@ -1,0 +1,6 @@
+{
+  "name": "Turing Linguistics Game",
+  "description": "Linguistics perception application supporting authentic SQL metrics logs and Firebase sessions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
