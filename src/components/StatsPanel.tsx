@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useAuth } from './AuthContext.tsx';
-import { RefreshCw, Play, GraduationCap, CheckCircle, AlertTriangle, Users, Layers } from 'lucide-react';
+import { RefreshCw, GraduationCap, CheckCircle, AlertTriangle, Users, Layers } from 'lucide-react';
 
 interface GuessRecord {
   id: number;
@@ -20,24 +19,22 @@ interface AggregatedStats {
   allGuesses: GuessRecord[];
 }
 
-export const StatsPanel: React.FC = () => {
-  const { token } = useAuth();
+interface StatsPanelProps {
+  statsTrigger?: number;
+}
+
+export const StatsPanel: React.FC<StatsPanelProps> = ({ statsTrigger = 0 }) => {
   const [stats, setStats] = useState<AggregatedStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchStats = async () => {
-    if (!token) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/stats/global', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const res = await fetch('/api/stats/global');
       if (!res.ok) {
-        throw new Error('Failed to retrieve researcher statistics.');
+        throw new Error('Failed to retrieve researcher statistics from MySQL.');
       }
       const data = await res.json();
       setStats(data);
@@ -50,23 +47,23 @@ export const StatsPanel: React.FC = () => {
 
   useEffect(() => {
     fetchStats();
-  }, [token]);
+  }, [statsTrigger]);
 
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center p-12 text-center">
         <RefreshCw className="w-8 h-8 animate-spin text-emerald-500 mb-3" />
-        <p className="text-sm font-mono text-gray-500">Retrieving PostgreSQL trial logs...</p>
+        <p className="text-sm font-mono text-gray-500">Retrieving MySQL trial logs...</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="p-6 bg-red-50 border border-red-200 rounded-lg text-red-700">
+      <div className="p-6 bg-red-950/40 border border-red-500/30 rounded-lg text-red-300">
         <p className="font-mono text-xs">{error}</p>
-        <button onClick={fetchStats} className="mt-3 text-xs bg-red-100 hover:bg-red-200 px-3 py-1.5 rounded transition">
-          Retry Sync
+        <button onClick={fetchStats} className="mt-3 text-xs bg-red-900/30 hover:bg-red-900/50 border border-red-500/20 px-3 py-1.5 rounded transition uppercase font-mono tracking-wider font-bold">
+          Retry Query
         </button>
       </div>
     );
@@ -116,7 +113,7 @@ export const StatsPanel: React.FC = () => {
               <p className="text-3xl font-mono font-light text-blue-400 mt-2">
                 {stats.totalRuns}
               </p>
-              <p className="text-[9px] text-gray-500 font-mono mt-1 uppercase">POSTGRES RECORDS</p>
+              <p className="text-[9px] text-gray-500 font-mono mt-1 uppercase">MYSQL RECORDS</p>
             </div>
 
             <div className="bg-[#161616] border border-[#333] p-4 rounded-lg shadow-lg">
@@ -146,10 +143,10 @@ export const StatsPanel: React.FC = () => {
           <div className="bg-[#161616] border border-[#333] rounded-lg overflow-hidden shadow-2xl">
             <div className="px-4 py-3 bg-[#1F1F1F] border-b border-[#333] flex items-center justify-between">
               <h3 className="text-[10px] font-mono font-bold uppercase text-gray-300 tracking-widest flex items-center gap-1.5">
-                DATABASE TABLE: guesses
+                DATABASE TABLE: game_results
               </h3>
               <span className="text-[9px] bg-green-500/10 text-green-400 border border-green-500/20 font-mono px-2 py-0.5 rounded">
-                METRICS HANDSHAKE SECURE [POSTGRES]
+                METRICS HANDSHAKE SECURE [MYSQL]
               </span>
             </div>
             
@@ -166,7 +163,7 @@ export const StatsPanel: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#222] text-gray-300">
-                  {stats.allGuesses.slice().reverse().map((record) => (
+                  {stats.allGuesses.map((record) => (
                     <tr key={record.id} className="hover:bg-blue-500/5 transition">
                       <td className="py-3 px-4 text-gray-500">#{record.id}</td>
                       <td className="py-3 px-4 text-white font-bold">{record.playerName}</td>
@@ -212,7 +209,7 @@ export const StatsPanel: React.FC = () => {
           <GraduationCap className="w-10 h-10 text-gray-600 mb-3" />
           <h4 className="font-mono font-medium text-white uppercase tracking-wider">No active trial records</h4>
           <p className="text-xs text-gray-400 max-w-xs mt-1">
-            Conduct dialogues in the Trial Simulator tab to write active telemetry logs to Cloud SQL tables.
+            Conduct dialogues in the Trial Simulator tab to write active telemetry logs to MySQL tables.
           </p>
         </div>
       )}

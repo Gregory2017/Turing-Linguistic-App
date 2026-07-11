@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
-import { useAuth } from './AuthContext.tsx';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { RefreshCw, CheckCircle, AlertTriangle, MessageSquare, Play, User } from 'lucide-react';
+import { RefreshCw, CheckCircle, AlertTriangle, Play } from 'lucide-react';
 
 interface DialogueData {
+  id: number;
   q1: string;
   a1: string;
   q2: string;
@@ -11,11 +11,13 @@ interface DialogueData {
   isNative: boolean;
 }
 
-export const GameCard: React.FC = () => {
-  const { token, user } = useAuth();
-  const [playerName, setPlayerName] = useState(user?.displayName || '');
-  const [gameState, setGameState] = useState<'name_input' | 'dialogue_active' | 'guess_submitted'>('name_input');
-  
+interface GameCardProps {
+  playerName: string;
+  onResultSubmitted: () => void;
+}
+
+export const GameCard: React.FC<GameCardProps> = ({ playerName, onResultSubmitted }) => {
+  const [gameState, setGameState] = useState<'idle' | 'dialogue_active' | 'guess_submitted'>('idle');
   const [dialogue, setDialogue] = useState<DialogueData | null>(null);
   const [userGuess, setUserGuess] = useState<boolean | null>(null);
   const [results, setResults] = useState<{ isCorrect: boolean } | null>(null);
@@ -24,17 +26,13 @@ export const GameCard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const fetchNewDialogue = async () => {
-    if (!token) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/dialogue/random', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const res = await fetch('/api/dialogue/random');
       if (!res.ok) {
-        throw new Error('Could not fetch dialogue from database.');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Could not fetch dialogue from MySQL database.');
       }
       const data = await res.json();
       setDialogue(data);
@@ -46,43 +44,42 @@ export const GameCard: React.FC = () => {
     }
   };
 
-  const handleStartGame = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!playerName.trim()) return;
+  useEffect(() => {
+    // Automatically fetch on mount since name is already provided in parent
     fetchNewDialogue();
-  };
+  }, []);
 
   const handleGuess = async (guess: boolean) => {
-    if (!dialogue || !token || submitting) return;
+    if (!dialogue || submitting) return;
     setSubmitting(true);
     setUserGuess(guess);
-    
-    const transcript = `A: ${dialogue.q1}\nB: ${dialogue.a1}\nA: ${dialogue.q2}\nB: ${dialogue.a2}`;
 
     try {
       const res = await fetch('/api/guesses', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          playerName: playerName.trim(),
-          dialogueText: transcript,
-          isNative: dialogue.isNative,
-          userGuess: guess
+          playerName: playerName,
+          phraseId: dialogue.id,
+          userGuessedNative: guess
         })
       });
 
       if (!res.ok) {
-        throw new Error('Failed to record guess inside postgres.');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to record guess in MySQL.');
       }
 
       const savedGuess = await res.json();
       setResults({ isCorrect: savedGuess.isCorrect });
       setGameState('guess_submitted');
+      
+      // Let App.tsx know a result is locked in, to trigger telemetry updates
+      onResultSubmitted();
     } catch (err: any) {
-      setError(err.message || 'Error occurred while locking in your answer.');
+      setError(err.message || 'Error occurred while saving your answer.');
     } finally {
       setSubmitting(false);
     }
@@ -95,60 +92,12 @@ export const GameCard: React.FC = () => {
     fetchNewDialogue();
   };
 
-  // 1. Name Entry View
-  if (gameState === 'name_input') {
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 15 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-md mx-auto bg-[#161616] border border-[#333] p-8 rounded-xl shadow-2xl glow-blue"
-      >
-        <div className="text-center space-y-3 mb-6">
-          <div className="inline-flex p-3 bg-blue-500/10 rounded-lg text-blue-400 border border-blue-500/20">
-            <MessageSquare className="w-5 h-5 animate-pulse" />
-          </div>
-          <h2 className="text-lg font-mono uppercase tracking-wider text-white">
-            Configure Session
-          </h2>
-          <p className="text-xs text-gray-400 max-w-xs mx-auto">
-            Designate a participant identifier code or operator callsign to write logs to SQL.
-          </p>
-        </div>
-
-        <form onSubmit={handleStartGame} className="space-y-4">
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-widest text-gray-500 mb-2 font-bold">
-              OPERATOR_ID / CALLSIGN
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. SUBJECT_BETA"
-              value={playerName}
-              onChange={(e) => setPlayerName(e.target.value)}
-              className="w-full bg-[#0E0E0E] border border-[#333] text-[#E0E0E0] font-mono text-xs px-4 py-3 rounded focus:outline-none focus:border-blue-500 focus:bg-black/80 transition"
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-mono uppercase text-xs font-bold py-3.5 px-4 rounded flex items-center justify-center gap-2 shadow-lg transition duration-150 cursor-pointer"
-          >
-            Launch Dialogue Stream
-            <Play className="w-3.5 h-3.5 fill-white" />
-          </button>
-        </form>
-      </motion.div>
-    );
-  }
-
-  // 2. Active Trial & Speech Bubbles View
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       {error && (
         <div className="p-4 bg-red-950/40 border border-red-500 text-red-300 text-xs font-mono rounded flex items-center justify-between">
           <span>ERROR: {error}</span>
-          <button onClick={handleReset} className="underline font-bold hover:text-red-100">Reset</button>
+          <button onClick={handleReset} className="underline font-bold hover:text-red-100 uppercase tracking-wider text-[10px]">Reset</button>
         </div>
       )}
 
@@ -156,7 +105,7 @@ export const GameCard: React.FC = () => {
         <div className="bg-[#161616] border border-[#333] p-12 rounded-xl text-center space-y-4 shadow-xl">
           <RefreshCw className="w-6 h-6 animate-spin text-blue-500 mx-auto" />
           <p className="text-xs font-mono text-gray-400 tracking-wider">
-            COMPILE RANDOM NLP TRANSCRIPT FROM postgres_pool...
+            COMPILE RANDOM NLP TRANSCRIPT FROM MySQL...
           </p>
         </div>
       ) : (
@@ -169,7 +118,7 @@ export const GameCard: React.FC = () => {
               <div className="flex items-center justify-between border-b border-[#2a2a2a] pb-3 mb-2">
                 <div className="flex items-center gap-2 text-[10px] text-gray-500 font-mono">
                   <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                  TRANSCRIPT_STREAM #{(1082 + Math.floor(Math.random() * 50)).toString()}
+                  TRANSCRIPT_STREAM #{dialogue.id}
                 </div>
                 <div className="text-[10px] text-gray-400 font-mono">
                   OPERATOR: <span className="text-blue-400 font-bold">{playerName}</span>
@@ -266,7 +215,7 @@ export const GameCard: React.FC = () => {
                         VERDICT: PERFECT HANDSHAKE 🎉
                       </h3>
                       <p className="text-xs text-gray-300 max-w-sm font-sans mx-auto leading-relaxed">
-                        Your cognitive parsing is accurate. Dialogue metrics have been written flawlessly to Cloud SQL tables.
+                        Your cognitive parsing is accurate. Dialogue metrics have been written flawlessly to MySQL tables.
                       </p>
                     </>
                   ) : (
@@ -321,4 +270,3 @@ export const GameCard: React.FC = () => {
     </div>
   );
 };
-

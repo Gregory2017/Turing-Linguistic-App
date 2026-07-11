@@ -2,18 +2,10 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import * as dotenv from "dotenv";
+import { getDbPool } from "./src/db/index.ts";
 
 // Load environment variables early
 dotenv.config();
-
-import { requireAuth, AuthRequest } from "./src/middleware/auth.ts";
-import {
-  getOrCreateUser,
-  getDialoguePhrases,
-  saveGuess,
-  getUserStats,
-  getGlobalStats
-} from "./src/db/db-helper.ts";
 
 async function startServer() {
   const app = express();
@@ -26,111 +18,139 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-  // Sync authenticated user in SQL Database
-  app.post("/api/auth/sync", requireAuth, async (req: AuthRequest, res) => {
+  // GET /api/dialogue/random
+  // Fetches a random phrase from the pre-built MySQL table and formats it for the game.
+  app.get("/api/dialogue/random", async (req, res) => {
     try {
-      const uid = req.user!.uid;
-      const email = req.user!.email || `${uid}@anonymous.com`;
-      const dbUser = await getOrCreateUser(uid, email);
-      res.json(dbUser);
-    } catch (error: any) {
-      console.error("Auth sync route failed:", error);
-      res.status(500).json({ error: error.message || "User sync failed" });
-    }
-  });
-
-  // Generate a random game dialogue using dynamic components from SQL
-  app.get("/api/dialogue/random", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const phrases = await getDialoguePhrases();
+      const pool = getDbPool();
       
-      const q1Pool = phrases.filter(p => p.phraseType === "q1");
-      const a1Pool = phrases.filter(p => p.phraseType === "a1");
-      const q2NativePool = phrases.filter(p => p.phraseType === "q2_native");
-      const a2NativePool = phrases.filter(p => p.phraseType === "a2_native");
-      const q2NonNativePool = phrases.filter(p => p.phraseType === "q2_non_native");
-      const a2NonNativePool = phrases.filter(p => p.phraseType === "a2_non_native");
+      // Select 1 random phrase from MySQL phrases table
+      const [rows]: any = await pool.query(
+        "SELECT id, category, question_1, answer_1, question_2, answer_2 FROM phrases ORDER BY RAND() LIMIT 1"
+      );
 
-      if (q1Pool.length === 0 || a1Pool.length === 0) {
-        return res.status(500).json({ error: "Linguistic database is unseeded or empty." });
+      if (!rows || rows.length === 0) {
+        return res.status(404).json({ 
+          error: "No phrases found in the 'phrases' table. Please ensure the database is seeded." 
+        });
       }
 
-      const pickRandom = (arr: any[]) => arr[Math.floor(Math.random() * arr.length)];
-
-      const isNative = Math.random() < 0.5;
-
-      const randomQ1 = pickRandom(q1Pool).content;
-      const randomA1 = pickRandom(a1Pool).content;
-      
-      let randomQ2 = "";
-      let randomA2 = "";
-
-      if (isNative) {
-        randomQ2 = pickRandom(q2NativePool).content;
-        randomA2 = pickRandom(a2NativePool).content;
-      } else {
-        randomQ2 = pickRandom(q2NonNativePool).content;
-        randomA2 = pickRandom(a2NonNativePool).content;
-      }
+      const row = rows[0];
+      const isNative = row.category?.toLowerCase() === "native";
 
       res.json({
-        q1: randomQ1,
-        a1: randomA1,
-        q2: randomQ2,
-        a2: randomA2,
-        isNative
+        id: row.id,
+        category: row.category,
+        q1: row.question_1,
+        a1: row.answer_1,
+        q2: row.question_2,
+        a2: row.answer_2,
+        isNative: isNative
       });
     } catch (error: any) {
-      console.error("Random dialogue compilation failed:", error);
-      res.status(500).json({ error: error.message || "Failed to generate dialogue" });
+      console.error("Failed to fetch random dialogue:", error);
+      res.status(500).json({ 
+        error: `Database query failed: ${error.message || "Unknown error"}. Check your .env configuration.` 
+      });
     }
   });
 
-  // Submit and log user guess to the database
-  app.post("/api/guesses", requireAuth, async (req: AuthRequest, res) => {
+  // POST /api/guesses
+  // Receives user guess and inserts a new game result into 'game_results'.
+  app.post("/api/guesses", async (req, res) => {
     try {
-      const { playerName, dialogueText, isNative, userGuess } = req.body;
-      const userId = req.user!.uid;
+      const { playerName, phraseId, userGuessedNative } = req.body;
 
-      if (!playerName || !dialogueText || isNative === undefined || userGuess === undefined) {
-        return res.status(400).json({ error: "Missing required properties in payload." });
+      if (!playerName || phraseId === undefined || userGuessedNative === undefined) {
+        return res.status(400).json({ error: "Missing required properties: playerName, phraseId, or userGuessedNative." });
       }
 
-      const guessRecord = await saveGuess({
-        userId,
-        playerName,
-        dialogueText,
-        isNative,
-        userGuess
+      const pool = getDbPool();
+
+      // Retrieve the phrase category from the database to securely verify the correct answer
+      const [phrases]: any = await pool.query(
+        "SELECT category FROM phrases WHERE id = ?",
+        [phraseId]
+      );
+
+      if (!phrases || phrases.length === 0) {
+        return res.status(404).json({ error: "Referenced phrase_id not found in 'phrases' table." });
+      }
+
+      const category = phrases[0].category || "";
+      const isNative = category.toLowerCase() === "native";
+      const isCorrect = isNative === !!userGuessedNative;
+
+      // Insert the trial guess log into 'game_results' table
+      const [insertResult]: any = await pool.query(
+        "INSERT INTO game_results (player_name, phrase_id, user_guessed_native, is_correct, played_at) VALUES (?, ?, ?, ?, NOW())",
+        [playerName.trim(), phraseId, userGuessedNative ? 1 : 0, isCorrect ? 1 : 0]
+      );
+
+      res.status(201).json({
+        id: insertResult.insertId,
+        isCorrect: isCorrect,
+        category: category,
+        isNative: isNative
+      });
+    } catch (error: any) {
+      console.error("Failed to record guess:", error);
+      res.status(500).json({ 
+        error: `Database insert failed: ${error.message || "Unknown error"}. Check your .env configuration.` 
+      });
+    }
+  });
+
+  // GET /api/stats/global
+  // Compiles overall linguistics statistics and logs from game_results left-joined with phrases.
+  app.get("/api/stats/global", async (req, res) => {
+    try {
+      const pool = getDbPool();
+
+      // SQL JOIN to fetch result logs combined with the actual phrase dialogues
+      const [rows]: any = await pool.query(
+        `SELECT r.id, r.player_name AS playerName, r.user_guessed_native AS userGuess, r.is_correct AS isCorrect, r.played_at AS createdAt,
+                p.question_1, p.answer_1, p.question_2, p.answer_2, p.category
+         FROM game_results r
+         LEFT JOIN phrases p ON r.phrase_id = p.id
+         ORDER BY r.id DESC`
+      );
+
+      const allGuesses = rows.map((row: any) => {
+        const q1 = row.question_1 || "";
+        const a1 = row.answer_1 || "";
+        const q2 = row.question_2 || "";
+        const a2 = row.answer_2 || "";
+        const transcript = `A: ${q1}\nB: ${a1}\nA: ${q2}\nB: ${a2}`;
+        const isNative = row.category?.toLowerCase() === "native";
+
+        return {
+          id: row.id,
+          playerName: row.playerName,
+          dialogueText: transcript,
+          isNative: isNative,
+          userGuess: !!row.userGuess,
+          isCorrect: !!row.isCorrect,
+          createdAt: row.createdAt
+        };
       });
 
-      res.status(201).json(guessRecord);
-    } catch (error: any) {
-      console.error("Recording guess error:", error);
-      res.status(500).json({ error: error.message || "Failed to record guess" });
-    }
-  });
+      const total = allGuesses.length;
+      const correct = allGuesses.filter((g: any) => g.isCorrect).length;
+      const accuracyRate = total > 0 ? parseFloat(((correct / total) * 100).toFixed(1)) : 0;
 
-  // Fetch individual player game records
-  app.get("/api/stats/personal", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const userId = req.user!.uid;
-      const logs = await getUserStats(userId);
-      res.json(logs);
+      res.json({
+        totalRuns: total,
+        accuracyRate: accuracyRate,
+        totalCorrect: correct,
+        totalIncorrect: total - correct,
+        allGuesses: allGuesses
+      });
     } catch (error: any) {
-      console.error("Failed to query user history:", error);
-      res.status(500).json({ error: error.message || "Failed to fetch stats" });
-    }
-  });
-
-  // Fetch aggregated linguistics experiment statistics (visible only in research logs)
-  app.get("/api/stats/global", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const globalStats = await getGlobalStats();
-      res.json(globalStats);
-    } catch (error: any) {
-      console.error("Failed to compile global metrics:", error);
-      res.status(500).json({ error: error.message || "Failed to fetch global stats" });
+      console.error("Failed to fetch statistics:", error);
+      res.status(500).json({ 
+        error: `Database stats fetch failed: ${error.message || "Unknown error"}. Check your .env configuration.` 
+      });
     }
   });
 
@@ -144,7 +164,6 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    // SPA fallback handling
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });

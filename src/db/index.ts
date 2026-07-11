@@ -1,26 +1,36 @@
-import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
-import * as schema from './schema.ts';
+import mysql from 'mysql2/promise';
 
-// Function to create a new connection pool using environment variables provided at runtime
-export const createPool = () => {
-  return new Pool({
-    host: process.env.SQL_HOST,
-    user: process.env.SQL_USER,
-    password: process.env.SQL_PASSWORD,
-    database: process.env.SQL_DB_NAME,
-    connectionTimeoutMillis: 15000,
-  });
-};
+let pool: mysql.Pool | null = null;
 
-// Create the connection pool instance
-const pool = createPool();
+/**
+ * Returns the MySQL connection pool, using lazy initialization.
+ */
+export function getDbPool(): mysql.Pool {
+  if (!pool) {
+    const host = process.env.DB_HOST || '127.0.0.1';
+    const port = parseInt(process.env.DB_PORT || '3306', 10);
+    const user = process.env.DB_USER || 'root';
+    const password = process.env.DB_PASSWORD || '';
+    const database = process.env.DB_NAME || 'turing_game';
 
-// Prevent unhandled pool-level errors from crashing the application
-pool.on('error', (err) => {
-  console.error('Unexpected error on idle SQL pool client:', err);
-});
+    console.log(`[Database] Initializing MySQL pool for database: ${database} at ${host}:${port}`);
 
-// Initialize Drizzle with the pool and schema (using ESM-friendly relative import)
-export const db = drizzle(pool, { schema });
-export { schema };
+    pool = mysql.createPool({
+      host,
+      port,
+      user,
+      password,
+      database,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 10000,
+    });
+
+    (pool as any).on('error', (err: any) => {
+      console.error('Unexpected error on idle MySQL connection pool:', err);
+    });
+  }
+  return pool;
+}
