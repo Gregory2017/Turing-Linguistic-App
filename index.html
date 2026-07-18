@@ -1,13 +1,244 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Симулятор Тьюринга</title>
+  <!-- Tailwind CSS CDN for elegant minimal styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#121212] text-[#E0E0E0] font-sans min-h-screen flex items-center justify-center p-4">
 
+  <div id="root" class="w-full max-w-lg bg-[#1E1E1E] border border-[#333333] rounded-lg p-6 shadow-xl"></div>
+
+  <!-- React & Babel CDNs -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function TuringApp() {
+      const [playerName, setPlayerName] = useState(() => {
+        return localStorage.getItem('turing_player_name') || '';
+      });
+      const [dialogue, setDialogue] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [userGuess, setUserGuess] = useState(null); // true for Human, false for Bot
+      const [results, setResults] = useState(null); // { isCorrect: boolean, category: string }
+      const [error, setError] = useState(null);
+
+      // Fetch a random dialogue from MySQL database
+      const loadNextDialogue = async () => {
+        setLoading(true);
+        setError(null);
+        setResults(null);
+        setUserGuess(null);
+        try {
+          const res = await fetch('/api/dialogue');
+          if (!res.ok) {
+            throw new Error('Не удалось загрузить диалог из базы данных.');
+          }
+          const data = await res.json();
+          setDialogue(data);
+        } catch (err) {
+          setError(err.message || 'Ошибка загрузки диалога.');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      // Auto-load on login
+      useEffect(() => {
+        if (playerName) {
+          loadNextDialogue();
+        }
+      }, [playerName]);
+
+      const handleLogin = (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.currentTarget);
+        const name = (formData.get('playerName') || '').trim();
+        if (name) {
+          setPlayerName(name);
+          localStorage.setItem('turing_player_name', name);
+        }
+      };
+
+      const handleLogout = () => {
+        setPlayerName('');
+        localStorage.removeItem('turing_player_name');
+        setDialogue(null);
+        setResults(null);
+        setUserGuess(null);
+      };
+
+      const handleGuess = async (guess) => {
+        if (!dialogue || results) return;
+        setUserGuess(guess);
+        try {
+          const res = await fetch('/api/guesses', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              playerName: playerName,
+              phraseId: dialogue.id,
+              userGuessedNative: guess
+            })
+          });
+          if (!res.ok) {
+            throw new Error('Не удалось отправить догадку.');
+          }
+          const data = await res.json();
+          setResults({
+            isCorrect: data.isCorrect,
+            category: data.category
+          });
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      // Screen 1: Enter operator name
+      if (!playerName) {
+        return (
+          <div className="space-y-4">
+            <div className="text-center">
+              <h1 className="text-xl font-bold tracking-wider text-white uppercase">Лингвистический Тест Тьюринга</h1>
+              <p className="text-xs text-gray-400 mt-1">Введите ваше имя исследователя для начала сессии</p>
+            </div>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-mono uppercase tracking-widest text-gray-500 mb-1">Имя оператора / Исследователя</label>
+                <input
+                  type="text"
+                  name="playerName"
+                  required
+                  placeholder="Например: Исследователь_А"
+                  className="w-full bg-[#121212] border border-[#444] text-[#E0E0E0] px-3 py-2 rounded text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-mono text-xs font-bold py-2.5 rounded transition uppercase tracking-wider"
+              >
+                Начать симуляцию
+              </button>
+            </form>
+          </div>
+        );
+      }
+
+      return (
+        <div className="space-y-6">
+          {/* Header */}
+          <div className="flex justify-between items-center border-b border-[#333] pb-3">
+            <div>
+              <span className="text-[10px] uppercase font-mono text-gray-500">Оператор:</span>
+              <span className="text-xs font-mono text-white font-bold ml-1.5">{playerName}</span>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="text-[10px] text-red-400 hover:text-red-300 uppercase font-mono tracking-wider"
+            >
+              [Выйти]
+            </button>
+          </div>
+
+          {/* Error display */}
+          {error && (
+            <div className="bg-red-950/50 border border-red-500/50 p-3 rounded text-red-200 text-xs font-mono">
+              Ошибка: {error}
+            </div>
+          )}
+
+          {/* Main content */}
+          {loading ? (
+            <div className="text-center py-8 text-sm font-mono text-gray-400">
+              Загрузка диалога из базы данных...
+            </div>
+          ) : (
+            dialogue && (
+              <div className="space-y-4">
+                {/* Transcript window */}
+                <div className="bg-[#121212] border border-[#333] p-4 rounded font-mono text-xs space-y-3 leading-relaxed">
+                  <div className="border-b border-[#222] pb-1.5 text-[10px] text-gray-500 flex justify-between">
+                    <span>ДИАЛОГ #{dialogue.id}</span>
+                    <span>ПОДБОРКА</span>
+                  </div>
+                  <div>
+                    <span className="text-blue-400 font-bold">[А]:</span> {dialogue.question_1}
+                  </div>
+                  <div>
+                    <span className="text-emerald-400 font-bold">[Б]:</span> {dialogue.answer_1}
+                  </div>
+                  <div className="pt-2 border-t border-[#1a1a1a]">
+                    <span className="text-blue-400 font-bold">[А]:</span> {dialogue.question_2}
+                  </div>
+                  <div>
+                    <span className="text-emerald-400 font-bold">[Б]:</span> {dialogue.answer_2}
+                  </div>
+                </div>
+
+                {/* Choice buttons */}
+                {!results && (
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      onClick={() => handleGuess(true)}
+                      className="flex-1 bg-transparent hover:bg-white hover:text-black text-white border border-white font-mono text-xs font-bold py-2.5 rounded transition uppercase tracking-wider"
+                    >
+                      Это Человек
+                    </button>
+                    <button
+                      onClick={() => handleGuess(false)}
+                      className="flex-1 bg-transparent hover:bg-purple-500 hover:text-white text-purple-400 border border-purple-500 font-mono text-xs font-bold py-2.5 rounded transition uppercase tracking-wider"
+                    >
+                      Это Бот
+                    </button>
+                  </div>
+                )}
+
+                {/* Result display */}
+                {results && (
+                  <div className={`p-4 rounded border text-center ${
+                    results.isCorrect 
+                      ? 'bg-emerald-950/40 border-emerald-500 text-emerald-200' 
+                      : 'bg-red-950/40 border-red-500 text-red-200'
+                  }`}>
+                    <h3 className="text-sm font-mono uppercase font-bold tracking-wider mb-1">
+                      {results.isCorrect ? '✓ Правильно!' : '✗ Неправильно!'}
+                    </h3>
+                    <p className="text-xs">
+                      Это был <span className="font-bold uppercase font-mono">{results.category === 'native' ? 'Человек' : 'Бот'}</span>.
+                    </p>
+                  </div>
+                )}
+
+                {/* Next button */}
+                <div className="pt-2">
+                  <button
+                    onClick={loadNextDialogue}
+                    disabled={!results}
+                    className={`w-full font-mono text-xs font-bold py-2.5 rounded transition uppercase tracking-wider ${
+                      results
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer'
+                        : 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700'
+                    }`}
+                  >
+                    Следующий диалог
+                  </button>
+                </div>
+              </div>
+            )
+          )}
+        </div>
+      );
+    }
+
+    const container = document.getElementById('root');
+    const root = ReactDOM.createRoot(container);
+    root.render(<TuringApp />);
+  </script>
+</body>
+</html>
